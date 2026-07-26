@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import BackButton from "@/components/BackButton";
 
 type Notification = {
   id: number;
@@ -54,7 +55,10 @@ export default function NotificationsPage() {
   if (loading) {
     return (
       <div className="space-y-4 animate-fade-in-up">
-        <h1 className="text-xl sm:text-2xl font-bold text-base-content">Notifications</h1>
+        <div className="flex items-center gap-3">
+          <BackButton />
+          <h1 className="text-xl sm:text-2xl font-bold text-base-content">Notifications</h1>
+        </div>
         {Array.from({ length: 6 }).map((_, i) => (
           <div key={i} className="bg-base-100 rounded-2xl border border-base-200 p-4 flex gap-3">
             <div className="w-10 h-10 rounded-full skeleton-loader shrink-0" />
@@ -71,14 +75,17 @@ export default function NotificationsPage() {
   return (
     <div className="space-y-4 animate-fade-in-up">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl sm:text-2xl font-bold text-base-content">
-          Notifications
-          {unreadCount > 0 && (
-            <span className="ml-2 text-sm font-medium text-white bg-primary px-2 py-0.5 rounded-full">
-              {unreadCount}
-            </span>
+        <div className="flex items-center gap-3">
+          <BackButton />
+          <h1 className="text-xl sm:text-2xl font-bold text-base-content">
+            Notifications
+            {unreadCount > 0 && (
+              <span className="ml-2 text-sm font-medium text-white bg-primary px-2 py-0.5 rounded-full">
+                {unreadCount}
+              </span>
           )}
         </h1>
+        </div>
         {unreadCount > 0 && (
           <button
             onClick={markAllRead}

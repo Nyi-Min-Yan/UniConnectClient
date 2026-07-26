@@ -1,9 +1,10 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import BackButton from "@/components/BackButton";
 import { useTheme } from "@/components/ThemeProvider";
 
-type SettingsSection = "profile" | "privacy" | "notifications" | "appearance";
+type SettingsSection = "privacy" | "notifications" | "appearance";
 
 const THEMES = [
   { id: "light", label: "Light" },
@@ -14,7 +15,7 @@ const THEMES = [
 export default function SettingsPage() {
   const { mode, setMode } = useTheme();
   const [loading, setLoading] = useState(true);
-  const [activeSection, setActiveSection] = useState<SettingsSection>("profile");
+  const [activeSection, setActiveSection] = useState<SettingsSection>("privacy");
 
   useEffect(() => {
     const timer = setTimeout(() => setLoading(false), 800);
@@ -24,7 +25,10 @@ export default function SettingsPage() {
   if (loading) {
     return (
       <div className="space-y-4 animate-fade-in-up">
-        <h1 className="text-xl sm:text-2xl font-bold text-base-content">Settings</h1>
+        <div className="flex items-center gap-3">
+          <BackButton />
+          <h1 className="text-xl sm:text-2xl font-bold text-base-content">Settings</h1>
+        </div>
         <div className="bg-base-100 rounded-2xl border border-base-200 p-6 space-y-4">
           {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} className="flex items-center justify-between">
@@ -41,7 +45,6 @@ export default function SettingsPage() {
   }
 
   const sections: { id: SettingsSection; label: string }[] = [
-    { id: "profile", label: "Profile" },
     { id: "privacy", label: "Privacy" },
     { id: "notifications", label: "Notifications" },
     { id: "appearance", label: "Appearance" },
@@ -49,7 +52,10 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-4 animate-fade-in-up">
-      <h1 className="text-xl sm:text-2xl font-bold text-base-content">Settings</h1>
+      <div className="flex items-center gap-3">
+        <BackButton />
+        <h1 className="text-xl sm:text-2xl font-bold text-base-content">Settings</h1>
+      </div>
 
       <div className="flex gap-2 overflow-x-auto pb-2">
         {sections.map((s) => (
@@ -68,29 +74,6 @@ export default function SettingsPage() {
       </div>
 
       <div className="bg-base-100 rounded-2xl border border-base-200 p-4 sm:p-6 shadow-sm">
-        {activeSection === "profile" && (
-          <div className="space-y-5">
-            <h2 className="text-lg font-bold text-base-content">Profile Settings</h2>
-            {[
-              { label: "Display Name", value: "User", type: "text" },
-              { label: "Email", value: "student@uni.edu", type: "email" },
-              { label: "Bio", value: "CS Student | Developer", type: "text" },
-            ].map((field) => (
-              <div key={field.label}>
-                <label className="text-sm font-medium text-base-content/70">{field.label}</label>
-                <input
-                  type={field.type}
-                  defaultValue={field.value}
-                  className="w-full mt-1 px-4 py-2.5 rounded-xl border border-base-200 bg-base-100 text-base-content text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all"
-                />
-              </div>
-            ))}
-            <button className="px-6 py-2.5 text-sm font-semibold rounded-xl bg-primary text-white hover:bg-primary/90 transition-all shadow-sm">
-              Save Changes
-            </button>
-          </div>
-        )}
-
         {activeSection === "privacy" && (
           <div className="space-y-5">
             <h2 className="text-lg font-bold text-base-content">Privacy Settings</h2>

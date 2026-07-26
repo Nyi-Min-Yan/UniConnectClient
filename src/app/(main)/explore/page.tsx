@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import BackButton from "@/components/BackButton";
 
 type ExploreCategory = "all" | "clubs" | "events" | "people" | "courses";
 
@@ -52,7 +53,10 @@ export default function ExplorePage() {
   if (loading) {
     return (
       <div className="space-y-4 animate-fade-in-up">
-        <h1 className="text-xl sm:text-2xl font-bold text-base-content">Explore</h1>
+        <div className="flex items-center gap-3">
+          <BackButton />
+          <h1 className="text-xl sm:text-2xl font-bold text-base-content">Explore</h1>
+        </div>
         <div className="h-10 skeleton-loader rounded-xl" />
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {Array.from({ length: 4 }).map((_, i) => (
@@ -73,7 +77,10 @@ export default function ExplorePage() {
 
   return (
     <div className="space-y-4 animate-fade-in-up">
-      <h1 className="text-xl sm:text-2xl font-bold text-base-content">Explore</h1>
+      <div className="flex items-center gap-3">
+        <BackButton />
+        <h1 className="text-xl sm:text-2xl font-bold text-base-content">Explore</h1>
+      </div>
 
       <div className="relative">
         <input

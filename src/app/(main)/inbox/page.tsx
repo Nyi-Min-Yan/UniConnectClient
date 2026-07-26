@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import BackButton from "@/components/BackButton";
 import ConfirmModal from "@/components/ConfirmModal";
 import Toast from "@/components/Toast";
 
@@ -93,7 +94,10 @@ export default function InboxPage() {
   if (loading) {
     return (
       <div className="space-y-4 animate-fade-in-up">
-        <h1 className="text-xl sm:text-2xl font-bold text-base-content">Inbox</h1>
+        <div className="flex items-center gap-3">
+          <BackButton />
+          <h1 className="text-xl sm:text-2xl font-bold text-base-content">Inbox</h1>
+        </div>
         {Array.from({ length: 5 }).map((_, i) => (
           <div key={i} className="bg-base-100 rounded-2xl border border-base-200 p-4 flex gap-3">
             <div className="w-10 h-10 rounded-full skeleton-loader shrink-0" />
@@ -110,7 +114,10 @@ export default function InboxPage() {
   return (
     <div className="space-y-4 animate-fade-in-up">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl sm:text-2xl font-bold text-base-content">Inbox</h1>
+        <div className="flex items-center gap-3">
+          <BackButton />
+          <h1 className="text-xl sm:text-2xl font-bold text-base-content">Inbox</h1>
+        </div>
         <button className="px-4 py-2 text-sm font-semibold rounded-xl bg-primary text-white hover:bg-primary/90 transition-all shadow-sm">
           Compose
         </button>

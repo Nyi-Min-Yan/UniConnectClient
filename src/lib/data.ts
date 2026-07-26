@@ -5,7 +5,33 @@ export type Student = {
   semester: number;
   department: string;
   email: string;
+  major: "CS" | "CT" | "CST";
 };
+
+export type Staff = {
+  id: number;
+  name: string;
+  email: string;
+  department: string;
+  role: "admin" | "finance" | "sa" | "itsm";
+  staffId: string;
+  phone: string;
+};
+
+export const MAJORS = ["CS", "CT", "CST"] as const;
+
+export const MAJOR_LABELS: Record<string, string> = {
+  CS: "Computer Science",
+  CT: "Computer Technology",
+  CST: "Computer Science & Technology",
+};
+
+export const STAFF_DEPARTMENTS = [
+  { id: "admin", name: "Administration" },
+  { id: "finance", name: "Finance" },
+  { id: "sa", name: "Student Affairs" },
+  { id: "itsm", name: "IT supporting and maintenance" },
+];
 
 export type ExamResult = {
   id: number;
@@ -55,6 +81,8 @@ function generateStudent(id: number, semester: number): Student {
   const firstName = pickDeterministic(FIRST_NAMES, id * 7 + semester * 3);
   const lastName = pickDeterministic(LAST_NAMES, id * 11 + semester * 5);
   const department = pickDeterministic(DEPARTMENTS, id * 13 + semester * 7);
+  const majorIdx = Math.floor(seededRandom(id * 17 + semester * 11) * 3);
+  const majors: Student["major"][] = ["CS", "CT", "CST"];
   const rollNum = String(1000 + id).padStart(4, "0");
   return {
     id,
@@ -63,6 +91,7 @@ function generateStudent(id: number, semester: number): Student {
     semester,
     department,
     email: `${firstName.toLowerCase()}.${lastName.toLowerCase()}@uni.edu`,
+    major: majors[majorIdx],
   };
 }
 
@@ -80,8 +109,39 @@ export function generateStudents(): Student[] {
 
 export const STUDENTS = generateStudents();
 
-export function getStudentsBySemester(semester: number): Student[] {
-  return STUDENTS.filter((s) => s.semester === semester);
+export function getYearBySemester(semester: number): number {
+  return Math.ceil(semester / 2);
+}
+
+export function getStudentsByYear(year: number): Student[] {
+  return STUDENTS.filter((s) => getYearBySemester(s.semester) === year);
+}
+
+export const YEAR_LABELS: Record<number, string> = {
+  1: "1st Year",
+  2: "2nd Year",
+  3: "3rd Year",
+  4: "4th Year",
+};
+
+export type LibraryRecord = {
+  rollNo: string;
+  hasOverdueBooks: boolean;
+  overdueCount: number;
+};
+
+export function generateLibraryRecords(): LibraryRecord[] {
+  return STUDENTS.map((s) => ({
+    rollNo: s.rollNo,
+    hasOverdueBooks: s.id % 7 === 0 || s.id % 13 === 0,
+    overdueCount: s.id % 7 === 0 || s.id % 13 === 0 ? (s.id % 3) + 1 : 0,
+  }));
+}
+
+export const LIBRARY_RECORDS = generateLibraryRecords();
+
+export function getLibraryStatus(rollNo: string): LibraryRecord {
+  return LIBRARY_RECORDS.find((r) => r.rollNo === rollNo) || { rollNo, hasOverdueBooks: false, overdueCount: 0 };
 }
 
 export function extractRollNoFromFilename(filename: string): string | null {
@@ -131,4 +191,24 @@ export function findStudentByName(query: string): Student[] {
   return STUDENTS.filter(
     (s) => s.name.toLowerCase().includes(lower) || s.rollNo.toLowerCase().includes(lower)
   );
+}
+
+export type DepartmentStats = {
+  department: string;
+  studentCount: number;
+  semesterDistribution: Record<number, number>;
+};
+
+export function getDepartmentStats(): DepartmentStats[] {
+  const map = new Map<string, Record<number, number>>();
+  for (const s of STUDENTS) {
+    if (!map.has(s.department)) map.set(s.department, {});
+    const dist = map.get(s.department)!;
+    dist[s.semester] = (dist[s.semester] || 0) + 1;
+  }
+  return Array.from(map.entries()).map(([department, semesterDistribution]) => ({
+    department,
+    studentCount: Object.values(semesterDistribution).reduce((a, b) => a + b, 0),
+    semesterDistribution,
+  })).sort((a, b) => b.studentCount - a.studentCount);
 }

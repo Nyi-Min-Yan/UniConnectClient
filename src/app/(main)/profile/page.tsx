@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
+import BackButton from "@/components/BackButton";
 
 type Tab = "posts" | "about" | "photos";
 
@@ -17,10 +18,10 @@ export default function ProfilePage() {
   if (loading) {
     return (
       <div className="space-y-4 animate-fade-in-up">
-        <div className="bg-base-100 rounded-2xl border border-base-200">
-          <div className="h-32 sm:h-48 skeleton-loader rounded-none rounded-t-2xl" />
+        <div className="bg-base-100 rounded-2xl border border-base-200 overflow-hidden">
+          <div className="h-32 sm:h-48 skeleton-loader rounded-none" />
           <div className="px-6 pb-6 -mt-12 relative z-10">
-            <div className="w-24 h-24 rounded-full skeleton-loader border-4 border-white" />
+            <div className="w-24 h-24 rounded-full skeleton-loader border-4 border-base-100" />
             <div className="mt-3 space-y-2">
               <div className="h-5 w-40 skeleton-loader" />
               <div className="h-3 w-28 skeleton-loader" />
@@ -48,7 +49,10 @@ export default function ProfilePage() {
             <div className="flex-1 pt-2 sm:pt-0">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div>
-                  <h1 className="text-xl sm:text-2xl font-bold text-base-content">User</h1>
+                  <div className="flex items-center gap-3">
+                    <BackButton />
+                    <h1 className="text-xl sm:text-2xl font-bold text-base-content">User</h1>
+                  </div>
                   <p className="text-sm text-base-content/50">Computer Science &middot; Year 3</p>
                 </div>
                 <Link
