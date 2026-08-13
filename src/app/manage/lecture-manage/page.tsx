@@ -2,23 +2,14 @@
 
 import { useState, useMemo } from "react";
 import BackButton from "@/components/ui/BackButton";
-import { useStaff } from "@/hooks/useUsers";
-import { useOrganizationalUnits, useTeachingAssignments, useActiveTerm, useCourses } from "@/hooks/useAcademic";
+import { useLecturers } from "@/hooks/useUsers";
+import type { LecturerResponse } from "@/types";
 
 export default function LecturersPage() {
   const [department, setDepartment] = useState<string | "all">("all");
   const [selectedTeacher, setSelectedTeacher] = useState<string | null>(null);
 
-  const { staff, isLoading } = useStaff();
-  const { units } = useOrganizationalUnits();
-  const { activeTerm } = useActiveTerm();
-  const { assignments } = useTeachingAssignments(activeTerm?.termId);
-  const { courses } = useCourses();
-
-  const lecturers = useMemo(
-    () => staff.filter((s: any) => s.positions?.some((p: any) => p.positionName === "LECTURER")),
-    [staff]
-  );
+  const { lecturers, isLoading, isError } = useLecturers();
 
   const departments = useMemo(
     () => [...new Set(lecturers.map((t) => t.unitName || t.unitId || "Unassigned"))].sort(),
@@ -33,14 +24,7 @@ export default function LecturersPage() {
 
   const teacher = selectedTeacher ? lecturers.find((t) => t.staffId === selectedTeacher) : null;
 
-  const teacherCourses = useMemo(() => {
-    if (!teacher) return [];
-    return assignments.filter((a: any) => a.staffId === teacher.staffId);
-  }, [teacher, assignments]);
-
-  const getCourseInfo = (courseId: string) => courses.find((c: any) => c.courseId === courseId);
-
-  const isHOD = (t: any) => t.positions?.some((p: any) => p.positionName === "HOD");
+  const isHOD = (t: LecturerResponse) => t.positions?.includes?.("HOD");
 
   const getInitials = (name: string) =>
     name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase();
@@ -97,9 +81,14 @@ export default function LecturersPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-1 space-y-1">
-          {filtered.map((t: any) => {
+          {isError && (
+            <div className="bg-error/10 border border-error/30 rounded-2xl px-4 py-3 text-sm text-error font-medium">
+              Failed to load lecturers — is the backend running? Please try again later.
+            </div>
+          )}
+
+          {filtered.map((t) => {
             const hod = isHOD(t);
-            const courseCount = assignments.filter((a: any) => a.staffId === t.staffId).length;
             return (
               <button
                 key={t.staffId}
@@ -124,7 +113,7 @@ export default function LecturersPage() {
                     </p>
                   </div>
                   <div className="text-right shrink-0">
-                    <p className="text-xs font-bold text-base-content">{courseCount}</p>
+                    <p className="text-xs font-bold text-base-content">{t.courseCount}</p>
                     <p className="text-[9px] text-base-content/30">courses</p>
                   </div>
                 </div>
@@ -156,7 +145,10 @@ export default function LecturersPage() {
                       )}
                     </div>
                     <p className="text-sm text-base-content/60">{teacher.unitName || "No department"}</p>
-                    <p className="text-xs text-base-content/40 mt-0.5">{teacher.staffNo}</p>
+                    <p className="text-xs text-base-content/40 mt-0.5">
+                      {teacher.staffNo}
+                      {teacher.email ? <span className="ml-2">{teacher.email}</span> : null}
+                    </p>
                   </div>
                 </div>
               </div>
@@ -168,45 +160,46 @@ export default function LecturersPage() {
                 </div>
                 <div className="bg-base-100 rounded-2xl border border-base-200 p-4 shadow-sm">
                   <p className="text-[10px] font-bold text-base-content/40 uppercase">Courses</p>
-                  <p className="text-2xl font-bold text-base-content mt-1">{teacherCourses.length}</p>
+                  <p className="text-2xl font-bold text-base-content mt-1">{teacher.courseCount}</p>
                 </div>
                 <div className="bg-base-100 rounded-2xl border border-base-200 p-4 shadow-sm">
-                  <p className="text-[10px] font-bold text-base-content/40 uppercase">Positions</p>
+                  <p className="text-[10px] font-bold text-base-content/40 uppercase">Role</p>
                   <p className="text-sm font-bold text-base-content mt-1">
-                    {teacher.positions?.map((p: any) => p.positionName).join(", ") || "—"}
+                    {teacher.positions?.join(", ") || "—"}
                   </p>
                 </div>
               </div>
 
               <div className="bg-base-100 rounded-2xl border border-base-200 shadow-sm overflow-hidden">
                 <div className="px-4 py-3 border-b border-base-200 bg-base-200/20">
-                  <h3 className="text-sm font-bold text-base-content">Assigned Courses ({teacherCourses.length})</h3>
+                  <h3 className="text-sm font-bold text-base-content">
+                    Assigned Courses ({teacher.courseCount})
+                  </h3>
                 </div>
                 <div className="divide-y divide-base-200">
-                  {teacherCourses.map((a: any) => {
-                    const course = getCourseInfo(a.courseId);
-                    return (
-                      <div key={a.assignmentId} className="flex items-center gap-3 px-4 py-3 hover:bg-base-200/30 transition-colors">
-                        <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center text-primary font-bold text-[10px] shrink-0">
-                          {a.courseCode?.split("-")[1] || a.courseCode?.slice(0, 4) || "?"}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-semibold text-base-content">{a.courseName || course?.courseName || a.courseCode}</p>
-                          <div className="flex items-center gap-2 text-[10px] text-base-content/40">
-                            <span className="font-mono">{a.courseCode}</span>
-                            <span className="w-1 h-1 rounded-full bg-base-content/20" />
-                            <span>Section {a.sectionName}</span>
-                            <span className="w-1 h-1 rounded-full bg-base-content/20" />
-                            <span>{course?.creditUnit ?? "?"} credits</span>
-                          </div>
-                        </div>
-                        <span className="text-[10px] text-base-content/30 bg-base-200 px-2 py-0.5 rounded-full">
-                          {a.assignmentStatus}
-                        </span>
+                  {teacher.assignedCourses.map((course) => (
+                    <div key={course.courseId} className="flex items-center gap-3 px-4 py-3 hover:bg-base-200/30 transition-colors">
+                      <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center text-primary font-bold text-[10px] shrink-0">
+                        {course.courseCode?.split("-")[1] || course.courseCode?.slice(0, 4) || "?"}
                       </div>
-                    );
-                  })}
-                  {teacherCourses.length === 0 && (
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold text-base-content">{course.courseName}</p>
+                        <div className="flex items-center gap-2 text-[10px] text-base-content/40 mt-0.5">
+                          <span className="font-mono">{course.courseCode}</span>
+                          <span className="w-1 h-1 rounded-full bg-base-content/20" />
+                          <span>Semester {course.semesterNo}</span>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap justify-end gap-1 shrink-0">
+                        {course.sections.map((sec) => (
+                          <span key={sec.sectionId} className="text-[10px] text-base-content/60 bg-base-200 px-2 py-0.5 rounded-full">
+                            Section {sec.sectionName}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                  {teacher.assignedCourses.length === 0 && (
                     <div className="px-4 py-6 text-center text-xs text-base-content/40">
                       No course assignments for this term
                     </div>

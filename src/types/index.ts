@@ -109,7 +109,7 @@ export type StudentResponse = {
   sectionId: UUID | null;
   sectionName: string | null;
   termId: UUID | null;
-  academicYear: number | null;
+  academicYear: string | null;
   rollNo: string;
   studentName: string;
   phoneNo: string | null;
@@ -152,7 +152,7 @@ export type SectionResponse = {
 
 export type AcademicTermResponse = {
   termId: UUID;
-  academicYear: number;
+  academicYear: string;
   startDate: string | null;
   endDate: string | null;
   status: TermStatus;
@@ -190,13 +190,43 @@ export type TeachingAssignmentResponse = {
   staffId: UUID;
   staffNo: string;
   staffName: string;
+  staffEmail: string;
+  unitId: UUID | null;
+  unitName: string | null;
   sectionId: UUID;
   sectionName: string;
   termId: UUID;
-  academicYear: number;
+  academicYear: string;
   assignmentStatus: AssignmentStatus;
   assignedAt: string;
   assignedByStaffId: UUID | null;
+};
+
+export type SectionInfoResponse = {
+  sectionId: UUID;
+  sectionName: string;
+};
+
+export type AssignedCourseResponse = {
+  courseId: UUID;
+  courseCode: string;
+  courseName: string;
+  semesterId: UUID;
+  semesterNo: number;
+  sections: SectionInfoResponse[];
+};
+
+export type LecturerResponse = {
+  staffId: UUID;
+  staffNo: string;
+  staffName: string;
+  email: string | null;
+  phoneNo: string | null;
+  unitId: UUID | null;
+  unitName: string | null;
+  positions: string[];
+  courseCount: number;
+  assignedCourses: AssignedCourseResponse[];
 };
 
 export type TimeSlotResponse = {
@@ -210,7 +240,7 @@ export type TimeSlotResponse = {
 export type GenerationSessionResponse = {
   generationId: UUID;
   termId: UUID;
-  academicYear: number;
+  academicYear: string;
   generatedByStaffId: UUID;
   generatedByStaffNo: string;
   status: GenerationStatus;
@@ -240,7 +270,9 @@ export type ScheduleResponse = {
 export type ClassSessionResponse = {
   sessionId: UUID;
   scheduleId: UUID;
+  termId: UUID | null;
   courseCode: string | null;
+  sectionId: UUID | null;
   sectionName: string | null;
   sessionDate: string;
   sessionStatus: SessionStatus;
@@ -268,7 +300,7 @@ export type ExamTypeResponse = {
 export type ResultBatchResponse = {
   batchId: UUID;
   termId: UUID;
-  academicYear: number;
+  academicYear: string;
   examTypeId: UUID;
   examTypeName: string;
   semesterId: UUID;

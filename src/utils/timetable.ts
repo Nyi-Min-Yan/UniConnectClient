@@ -81,40 +81,86 @@ export function mapSchedulesToTimetableEntries(
   const entries: TimetableEntry[] = [];
 
   for (const schedule of schedules) {
-    if (schedule.scheduleType !== 'COURSE' || !schedule.teachingAssignmentId) continue;
-
-    const assignment = schedule.teachingAssignmentId 
-      ? assignmentMap.get(schedule.teachingAssignmentId)
-      : undefined;
-    const course = assignment?.courseId 
-      ? courseMap.get(assignment.courseId)
-      : undefined;
-    const teacher = assignment?.staffId 
-      ? staffMap.get(assignment.staffId)
-      : undefined;
-    const startSlot = schedule.startSlotId 
+    const startSlot = schedule.startSlotId
       ? timeSlotMap.get(schedule.startSlotId)
       : undefined;
-    const endSlot = schedule.endSlotId 
+    const endSlot = schedule.endSlotId
       ? timeSlotMap.get(schedule.endSlotId)
       : undefined;
 
-    if (!course || !startSlot || !endSlot) continue;
+    if (!startSlot || !endSlot) continue;
 
-    // Determine if it's a lab or lecture based on course meeting requirements
-    // If course has meetingRequirements property
-    const isLab = (course as any).meetingRequirements?.some(
-      (req: MeetingRequirementResponse) => req.meetingType === 'LAB'
-    ) || false;
+    if (schedule.scheduleType === 'COURSE') {
+      if (!schedule.teachingAssignmentId) continue;
 
+      const assignment = schedule.teachingAssignmentId
+        ? assignmentMap.get(schedule.teachingAssignmentId)
+        : undefined;
+      const course = assignment?.courseId
+        ? courseMap.get(assignment.courseId)
+        : undefined;
+      const teacher = assignment?.staffId
+        ? staffMap.get(assignment.staffId)
+        : undefined;
+
+      if (!course) continue;
+
+      // Determine if it's a lab or lecture based on course meeting requirements
+      // If course has meetingRequirements property
+      const isLab = (course as any).meetingRequirements?.some(
+        (req: MeetingRequirementResponse) => req.meetingType === 'LAB'
+      ) || false;
+
+      entries.push({
+        course,
+        teachingAssignment: assignment,
+        section,
+        sectionId,
+        year,
+        semester,
+        type: isLab ? 'LAB' : 'LECTURE',
+        slot: {
+          day: DAYS[schedule.dayOfWeek - 1] || 'Monday',
+          start: startSlot.startTime,
+          end: endSlot.endTime,
+          slotId: schedule.startSlotId,
+          periodNo: startSlot.periodNo,
+        },
+        room: (schedule as any).room || `Room ${Math.floor(Math.random() * 10) + 1}`,
+        teacherName: teacher?.staffName || 'Unknown',
+        teacherId: teacher?.staffId,
+        scheduleId: schedule.scheduleId,
+      });
+      continue;
+    }
+
+    // LMS / ASSIGNMENT / BREAK: timetable activities without a teaching assignment.
+    const typeName = schedule.scheduleType;
+    const label =
+      typeName === 'LMS' ? 'LMS Activity'
+      : typeName === 'ASSIGNMENT' ? 'Assignment'
+      : 'Break';
     entries.push({
-      course,
-      teachingAssignment: assignment,
+      course: {
+        courseId: schedule.scheduleId,
+        unitId: schedule.generationId,
+        unitCode: '',
+        courseCode: schedule.courseCode || typeName,
+        courseName: label,
+        creditUnit: 0,
+        majorId: null,
+        majorCode: null,
+        semesterId: null,
+        semesterNo: null,
+        isRequired: false,
+        displayOrder: 0,
+      },
+      teachingAssignment: undefined,
       section,
       sectionId,
       year,
       semester,
-      type: isLab ? 'LAB' : 'LECTURE',
+      type: typeName as 'LMS' | 'ASSIGNMENT' | 'BREAK',
       slot: {
         day: DAYS[schedule.dayOfWeek - 1] || 'Monday',
         start: startSlot.startTime,
@@ -122,9 +168,9 @@ export function mapSchedulesToTimetableEntries(
         slotId: schedule.startSlotId,
         periodNo: startSlot.periodNo,
       },
-      room: (schedule as any).room || `Room ${Math.floor(Math.random() * 10) + 1}`,
-      teacherName: teacher?.staffName || 'Unknown',
-      teacherId: teacher?.staffId,
+      room: (schedule as any).room || '',
+      teacherName: schedule.staffName || undefined,
+      teacherId: undefined,
       scheduleId: schedule.scheduleId,
     });
   }

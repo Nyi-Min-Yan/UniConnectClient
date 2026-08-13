@@ -1,19 +1,53 @@
 "use client";
 
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useState, useRef } from "react";
+import { useSWRConfig } from "swr";
+import { apiClient } from "@/lib/axios";
 import {
-  useStudents,
-  useStudentResults,
-} from "@/hooks/useUsers";
-import {
+  useAcademicTerms,
+  useActiveTerm,
+  useExamTypes,
+  useSemesters,
   useResultBatches,
   useResultDocuments,
-  useActiveTerm,
-  useSemesters,
 } from "@/hooks/useAcademic";
 import BackButton from "@/components/ui/BackButton";
 import Toast from "@/components/ui/Toast";
 import ConfirmModal from "@/components/ui/ConfirmModal";
+
+type UploadSummary = {
+  batchId: string;
+  totalFiles: number;
+  matchedFiles: number;
+  unmatchedFiles: number;
+  insertedDocuments: number;
+  updatedDocuments: number;
+  failedFiles: number;
+  skippedFiles: number;
+  unmatchedFileNames: string[];
+  failedFileNames: string[];
+  skippedFileNames: string[];
+};
+
+type ToastState = { visible: boolean; message: string; type: "success" | "error" };
+
+function getErrorMessage(err: unknown): string {
+  if (typeof err === "object" && err !== null && "response" in err) {
+    const res = (err as { response?: { status?: number; data?: { message?: string } } }).response;
+    if (res) {
+      const status = res.status;
+      if (status === 400) return res.data?.message || "Bad request — check the selected term, exam type and semester.";
+      if (status === 401) return "Session expired — please log in again.";
+      if (status === 403) return "Permission denied — only staff with exam access can do this.";
+      if (status === 404) return "Resource not found.";
+      if (status === 409) return "Conflict — the resource already exists.";
+      if (status === 413) return "File too large (max 20MB per file, 200MB per upload).";
+      if (status !== undefined && status >= 500) return "Server error — please try again later.";
+      return res.data?.message || `Request failed (${status}).`;
+    }
+  }
+  return "Network error — backend unavailable.";
+}
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`;
@@ -21,278 +55,125 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
-type UploadedFile = {
-  id: number;
-  fileName: string;
-  fileSize: number;
-  rollNo: string | null;
-  matchedStudent: { id: string; name: string; semester: number } | null;
-  matchMethod: "roll" | "name" | null;
-  status: "pending" | "matched" | "unmatched" | "sent";
-};
-
-type Tab = "upload" | "students";
-
-type ResultStatus = "received" | "pending" | "unavailable";
-
-// Helper functions for filename parsing
-const extractRollNoFromFilename = (fileName: string): string | null => {
-  // Match patterns like 1234, 2021-1234, etc.
-  const match = fileName.match(/\b(\d{4,})\b/);
-  return match ? match[1] : null;
-};
-
-const extractNamesFromFilename = (fileName: string): string[] => {
-  // Remove extension and split by common separators
-  const name = fileName.replace(/\.[^/.]+$/, "");
-  // Try to find names that look like "FirstName LastName"
-  const nameMatch = name.match(/([A-Z][a-z]+)\s+([A-Z][a-z]+)/);
-  if (nameMatch) {
-    return [nameMatch[0]];
-  }
-  return [];
-};
-
-const YEAR_LABELS: Record<number, string> = {
-  1: "Year 1",
-  2: "Year 2",
-  3: "Year 3",
-  4: "Year 4",
-};
-
 export default function ExamResultsPage() {
-  const [files, setFiles] = useState<UploadedFile[]>([]);
-  const [yearFilter, setYearFilter] = useState<number>(1);
-  const [uploadYearFilter, setUploadYearFilter] = useState<number>(0);
-  const [libraryFilter, setLibraryFilter] = useState<"all" | "clear" | "hold">("all");
-  const [academicYear, setAcademicYear] = useState("2025-2026");
-  const [dragOver, setDragOver] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [toast, setToast] = useState({ visible: false, message: "", type: "success" as "success" | "error" });
-  const [confirmSend, setConfirmSend] = useState(false);
-  const [tab, setTab] = useState<Tab>("upload");
+  const { mutate } = useSWRConfig();
+  const { terms } = useAcademicTerms();
+  const { activeTerm } = useActiveTerm();
+  const { examTypes } = useExamTypes();
+  const { semesters } = useSemesters();
+
+  const [termId, setTermId] = useState<string>("");
+  const [examTypeId, setExamTypeId] = useState<string>("");
+  const [semesterId, setSemesterId] = useState<string>("");
+  const [selectedBatchId, setSelectedBatchId] = useState<string>("");
+  const [files, setFiles] = useState<File[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [summary, setSummary] = useState<UploadSummary | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [publishing, setPublishing] = useState(false);
+  const [confirmPublish, setConfirmPublish] = useState(false);
+  const [toast, setToast] = useState<ToastState>({ visible: false, message: "", type: "success" });
   const fileRef = useRef<HTMLInputElement>(null);
 
-  // Fetch real data from API
-  const { students, isLoading: studentsLoading } = useStudents();
-  const { activeTerm } = useActiveTerm();
-  const { semesters } = useSemesters();
-  const { batches } = useResultBatches(activeTerm?.termId);
-  const { documents } = useResultDocuments(batches?.[0]?.batchId || null);
+  const effectiveTermId = termId || activeTerm?.termId || terms?.[0]?.termId || "";
+  const effectiveExamTypeId = examTypeId || examTypes?.[0]?.examTypeId || "";
+  const effectiveSemesterId = semesterId || semesters?.[0]?.semesterId || "";
 
-  // Get library status - this should come from a real API
-  // For now, we'll simulate it based on student data
-  const getLibraryStatus = (rollNo: string): { hasOverdueBooks: boolean; overdueCount: number } => {
-    // This should be replaced with a real API call
-    // For demo, we'll use a deterministic check based on roll number
-    const rollNum = parseInt(rollNo) || 0;
-    return {
-      hasOverdueBooks: rollNum % 7 === 0,
-      overdueCount: rollNum % 7 === 0 ? Math.floor((rollNum % 10) + 1) : 0,
-    };
+  const { batches, isLoading: batchesLoading } = useResultBatches(
+    effectiveTermId || undefined,
+    effectiveSemesterId || undefined,
+    effectiveExamTypeId || undefined
+  );
+  const batchId = selectedBatchId || batches?.[0]?.batchId || "";
+  const { documents, isLoading: documentsLoading } = useResultDocuments(batchId || null);
+  const selectedBatch = batches?.find((b: any) => b.batchId === batchId) || null;
+
+  const refresh = () => {
+    mutate((key) => typeof key === "string" && key.startsWith("/api/result-batches"));
+    mutate((key) => typeof key === "string" && key.startsWith("/api/result-documents"));
   };
 
-  // Filter students by year based on semester
-  const getStudentsByYear = (year: number) => {
-    // Students with semesters 1-2 are Year 1, 3-4 are Year 2, etc.
-    const semesterRange = {
-      1: [1, 2],
-      2: [3, 4],
-      3: [5, 6],
-      4: [7, 8],
-    };
-    const semNos = semesterRange[year as keyof typeof semesterRange] || [];
-    return students?.filter((s: any) => semNos.includes(s.semesterNo || 0)) || [];
-  };
-
-  // Get semester label
-  const getYearBySemester = (semesterNo: number): number => {
-    if (semesterNo <= 2) return 1;
-    if (semesterNo <= 4) return 2;
-    if (semesterNo <= 6) return 3;
-    return 4;
-  };
-
-  const processFiles = (fileList: FileList) => {
-    let replaceCount = 0;
-    let addCount = 0;
-    const yearPool = uploadYearFilter === 0 
-      ? students || [] 
-      : getStudentsByYear(uploadYearFilter);
-    
-    setFiles((prev) => {
-      const working = [...prev];
-      Array.from(fileList).forEach((file) => {
-        if (!file.name.toLowerCase().endsWith(".pdf")) return;
-        const rollNo = extractRollNoFromFilename(file.name);
-        let matchedStudent: UploadedFile["matchedStudent"] = null;
-        let matchMethod: UploadedFile["matchMethod"] = null;
-        let status: UploadedFile["status"] = "unmatched";
-        
-        if (rollNo) {
-          const s = yearPool.find((st: any) => st.rollNo === rollNo);
-          if (s) { 
-            matchedStudent = { 
-              id: s.studentId, 
-              name: s.studentName, 
-              semester: s.semesterNo || 0 
-            }; 
-            matchMethod = "roll"; 
-            status = "matched"; 
-          }
-        }
-        
-        if (!matchedStudent) {
-          const names = extractNamesFromFilename(file.name);
-          if (names.length > 0) {
-            const byName = yearPool.filter((st: any) => 
-              st.studentName.toLowerCase().includes(names[0].toLowerCase()) || 
-              names[0].toLowerCase().includes(st.studentName.toLowerCase().split(" ")[0])
-            );
-            if (byName.length > 0) {
-              const s = byName[0];
-              matchedStudent = { 
-                id: s.studentId, 
-                name: s.studentName, 
-                semester: s.semesterNo || 0 
-              };
-              matchMethod = "name";
-              status = "matched";
-            }
-          }
-        }
-        
-        const newFile: UploadedFile = {
-          id: Date.now() + Math.floor(Math.random() * 1000),
-          fileName: file.name, 
-          fileSize: file.size, 
-          rollNo: rollNo || null,
-          matchedStudent, 
-          matchMethod, 
-          status,
-        };
-        
-        const dupIdx = working.findIndex((f) => f.rollNo === newFile.rollNo && f.fileSize === newFile.fileSize);
-        if (dupIdx !== -1) { 
-          working[dupIdx] = { 
-            ...newFile, 
-            id: working[dupIdx].id, 
-            status: working[dupIdx].status === "sent" ? "sent" : newFile.status 
-          }; 
-          replaceCount++; 
-        } else { 
-          working.push(newFile); 
-          addCount++; 
-        }
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files?.length) {
+      const pdfs = Array.from(e.target.files).filter((f) => f.name.toLowerCase().endsWith(".pdf"));
+      setFiles((prev) => {
+        const seen = new Set(prev.map((f) => f.name));
+        return [...prev, ...pdfs.filter((f) => !seen.has(f.name))];
       });
-      return working;
-    });
-    
-    setTimeout(() => {
-      if (replaceCount > 0 || addCount > 0) 
-        setToast({ 
-          visible: true, 
-          message: replaceCount > 0 ? `${replaceCount} replaced, ${addCount} new` : `${addCount} added`, 
-          type: "success" 
-        });
-    }, 100);
-  };
-
-  const handleDrop = (e: React.DragEvent) => { 
-    e.preventDefault(); 
-    setDragOver(false); 
-    if (e.dataTransfer.files.length > 0) processFiles(e.dataTransfer.files); 
-  };
-  
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => { 
-    if (e.target.files?.length) { 
-      processFiles(e.target.files); 
-      e.target.value = ""; 
-    } 
-  };
-  
-  const removeFile = (id: number) => setFiles((p) => p.filter((f) => f.id !== id));
-
-  const getResultStatus = (rollNo: string): ResultStatus => {
-    const match = files.find((f) => f.rollNo === rollNo);
-    if (!match) return "unavailable";
-    if (match.status === "sent") return "received";
-    return "pending";
-  };
-
-  const canSendTo = (rollNo: string): { ok: boolean; reason?: string } => {
-    const lib = getLibraryStatus(rollNo);
-    if (lib.hasOverdueBooks) return { ok: false, reason: `${lib.overdueCount} overdue book${lib.overdueCount > 1 ? "s" : ""}` };
-    return { ok: true };
-  };
-
-  const sendSingle = (fileId: number) => {
-    const file = files.find((f) => f.id === fileId);
-    if (file?.rollNo) {
-      const check = canSendTo(file.rollNo);
-      if (!check.ok) { 
-        setToast({ 
-          visible: true, 
-          message: `Cannot send — ${file.matchedStudent?.name} has ${check.reason}`, 
-          type: "error" 
-        }); 
-        return; 
-      }
+      e.target.value = "";
     }
-    setFiles((p) => p.map((f) => f.id === fileId && f.status === "matched" ? { ...f, status: "sent" as const } : f));
-    setToast({ visible: true, message: "Exam result sent!", type: "success" });
   };
 
-  const sendAll = async () => {
-    const blocked: string[] = [];
-    for (const f of files) {
-      if (f.status === "matched" && f.rollNo) {
-        const check = canSendTo(f.rollNo);
-        if (!check.ok) blocked.push(f.matchedStudent?.name || f.rollNo);
-      }
-    }
-    if (blocked.length > 0) {
-      setToast({ 
-        visible: true, 
-        message: `${blocked.length} student${blocked.length > 1 ? "s" : ""} blocked by library hold`, 
-        type: "error" 
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (e.dataTransfer.files.length > 0) {
+      const pdfs = Array.from(e.dataTransfer.files).filter((f) => f.name.toLowerCase().endsWith(".pdf"));
+      setFiles((prev) => {
+        const seen = new Set(prev.map((f) => f.name));
+        return [...prev, ...pdfs.filter((f) => !seen.has(f.name))];
       });
-      setConfirmSend(false); 
-      setSending(false); 
+    }
+  };
+
+  const removeFile = (name: string) => setFiles((prev) => prev.filter((f) => f.name !== name));
+
+  const upload = async () => {
+    if (files.length === 0) return;
+    if (!effectiveTermId || !effectiveExamTypeId || !effectiveSemesterId) {
+      setError("Select an academic term, exam type and semester before uploading.");
       return;
     }
-    setSending(true);
-    await new Promise((r) => setTimeout(r, 2000));
-    setFiles((p) => p.map((f) => f.status === "matched" ? { ...f, status: "sent" as const } : f));
-    setSending(false); 
-    setConfirmSend(false);
-    setToast({ visible: true, message: `${files.filter(f => f.status === "matched").length} sent to students!`, type: "success" });
+    setError(null);
+    setSummary(null);
+    setUploading(true);
+    setUploadProgress(0);
+    try {
+      const formData = new FormData();
+      formData.append("termId", effectiveTermId);
+      formData.append("examTypeId", effectiveExamTypeId);
+      formData.append("semesterId", effectiveSemesterId);
+      files.forEach((f) => formData.append("files", f, f.name));
+      const { data } = await apiClient.post("/api/result-batches", formData, {
+        headers: { "Content-Type": undefined },
+        onUploadProgress: (evt) => {
+          if (evt.total) setUploadProgress(Math.round((evt.loaded / evt.total) * 100));
+        },
+      });
+      setSummary(data as UploadSummary);
+      setSelectedBatchId(data.batchId);
+      setFiles([]);
+      refresh();
+      setToast({ visible: true, message: "Upload complete — batch updated", type: "success" });
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setUploading(false);
+    }
   };
 
-  const unmatched = files.filter((f) => f.status === "unmatched");
-  const matchedCount = files.filter((f) => f.status === "matched").length;
-  const sentCount = files.filter((f) => f.status === "sent").length;
-  const totalFiles = files.length;
+  const publish = async () => {
+    if (!batchId) return;
+    setPublishing(true);
+    setError(null);
+    try {
+      await apiClient.post(`/api/result-batches/${batchId}/publish`);
+      setConfirmPublish(false);
+      refresh();
+      setToast({ visible: true, message: "Batch published to students", type: "success" });
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setPublishing(false);
+    }
+  };
 
-  const progressPct = totalFiles > 0 ? Math.round((sentCount / totalFiles) * 100) : 0;
-  const matchedPct = totalFiles > 0 ? Math.round(((matchedCount + sentCount) / totalFiles) * 100) : 0;
+  const termLabel = (id: string) => {
+    const t = terms?.find((x: any) => x.termId === id);
+    return t ? `${t.academicYear}` : "Term";
+  };
 
-  const yearStudents = getStudentsByYear(yearFilter).filter((s: any) => {
-    if (libraryFilter === "clear") return !getLibraryStatus(s.rollNo).hasOverdueBooks;
-    if (libraryFilter === "hold") return getLibraryStatus(s.rollNo).hasOverdueBooks;
-    return true;
-  });
-
-  if (studentsLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="text-center">
-          <div className="w-12 h-12 border-4 border-primary/20 border-t-primary rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-base-content/60">Loading students...</p>
-        </div>
-      </div>
-    );
-  }
+  const ready = Boolean(effectiveTermId && effectiveExamTypeId && effectiveSemesterId);
 
   return (
     <div className="space-y-4 animate-fade-in-up">
@@ -303,392 +184,328 @@ export default function ExamResultsPage() {
               <BackButton />
               <h1 className="text-xl sm:text-2xl font-bold">Exam Results</h1>
             </div>
-            <p className="text-white/70 text-sm mt-0.5">Upload, match &amp; deliver to students</p>
+            <p className="text-white/70 text-sm mt-0.5">
+              Upload PDFs matched by roll number &middot; re-upload to the same batch &middot; publish
+            </p>
           </div>
           <div className="bg-white/15 backdrop-blur-sm rounded-xl px-3 py-2 text-center">
-            <p className="text-2xl font-bold">{sentCount}</p>
-            <p className="text-[10px] text-white/70 uppercase tracking-wider">Sent</p>
+            <p className="text-2xl font-bold">{batches?.length ?? 0}</p>
+            <p className="text-[10px] text-white/70 uppercase tracking-wider">Batches</p>
           </div>
         </div>
-        {totalFiles > 0 && (
-          <div className="mt-4 grid grid-cols-3 gap-3">
-            <div className="bg-white/10 backdrop-blur-sm rounded-xl px-3 py-2.5 text-center">
-              <p className="text-lg font-bold">{totalFiles}</p>
-              <p className="text-[10px] text-white/60 uppercase">Total</p>
+        {summary && (
+          <div className="mt-4 grid grid-cols-2 sm:grid-cols-5 gap-2">
+            <div className="bg-white/10 backdrop-blur-sm rounded-xl px-3 py-2 text-center">
+              <p className="text-lg font-bold">{summary.totalFiles}</p>
+              <p className="text-[10px] text-white/60 uppercase">Files</p>
             </div>
-            <div className="bg-white/10 backdrop-blur-sm rounded-xl px-3 py-2.5 text-center">
-              <p className="text-lg font-bold text-green-200">{matchedCount}</p>
+            <div className="bg-white/10 backdrop-blur-sm rounded-xl px-3 py-2 text-center">
+              <p className="text-lg font-bold text-green-200">{summary.matchedFiles}</p>
               <p className="text-[10px] text-white/60 uppercase">Matched</p>
             </div>
-            <div className="bg-white/10 backdrop-blur-sm rounded-xl px-3 py-2.5 text-center">
-              <p className="text-lg font-bold text-red-200">{unmatched.length}</p>
+            <div className="bg-white/10 backdrop-blur-sm rounded-xl px-3 py-2 text-center">
+              <p className="text-lg font-bold text-red-200">{summary.unmatchedFiles + summary.failedFiles}</p>
               <p className="text-[10px] text-white/60 uppercase">Unmatched</p>
             </div>
-          </div>
-        )}
-        {totalFiles > 0 && (
-          <div className="mt-3">
-            <div className="flex items-center justify-between text-xs text-white/70 mb-1">
-              <span>Delivery progress</span>
-              <span>{progressPct}%</span>
+            <div className="bg-white/10 backdrop-blur-sm rounded-xl px-3 py-2 text-center">
+              <p className="text-lg font-bold text-blue-200">{summary.insertedDocuments}</p>
+              <p className="text-[10px] text-white/60 uppercase">Inserted</p>
             </div>
-            <div className="h-2 bg-white/15 rounded-full overflow-hidden">
-              <div className="h-full bg-white rounded-full transition-all duration-700" style={{ width: `${progressPct}%` }} />
+            <div className="bg-white/10 backdrop-blur-sm rounded-xl px-3 py-2 text-center">
+              <p className="text-lg font-bold text-amber-200">{summary.updatedDocuments}</p>
+              <p className="text-[10px] text-white/60 uppercase">Updated</p>
             </div>
           </div>
         )}
       </div>
 
-      <div className="flex gap-2">
-        <button 
-          onClick={() => setTab("upload")} 
-          className={`px-5 py-2 text-xs font-bold rounded-full transition-all ${tab === "upload" ? "bg-primary text-white shadow-sm" : "bg-base-100 text-base-content/60 border border-base-200 hover:bg-base-200"}`}
-        >
-          <span className="flex items-center gap-1.5">
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-            </svg>
-            Upload
-          </span>
-        </button>
-        <button 
-          onClick={() => setTab("students")} 
-          className={`px-5 py-2 text-xs font-bold rounded-full transition-all ${tab === "students" ? "bg-primary text-white shadow-sm" : "bg-base-100 text-base-content/60 border border-base-200 hover:bg-base-200"}`}
-        >
-          <span className="flex items-center gap-1.5">
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5 9a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0z" />
-            </svg>
-            Students
-          </span>
-        </button>
+      {error && (
+        <div className="bg-error/10 border border-error/30 rounded-2xl px-4 py-3 text-sm text-error font-medium">
+          {error}
+        </div>
+      )}
+
+      <div className="bg-base-100 rounded-2xl border border-base-200 p-4 sm:p-5 shadow-sm space-y-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div>
+            <label className="text-xs font-medium text-base-content/60 mb-1.5 block">Academic Term</label>
+            <select
+              value={effectiveTermId}
+              onChange={(e) => { setTermId(e.target.value); setSelectedBatchId(""); setSummary(null); }}
+              className="w-full px-3 py-2.5 text-sm rounded-xl border border-base-200 bg-base-100 text-base-content outline-none focus:border-primary"
+            >
+              {!terms?.length && <option value="">Loading terms...</option>}
+              {terms?.map((t: any) => (
+                <option key={t.termId} value={t.termId}>
+                  {t.academicYear} {t.status === "ACTIVE" ? "(active)" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-base-content/60 mb-1.5 block">Exam Type</label>
+            <select
+              value={effectiveExamTypeId}
+              onChange={(e) => { setExamTypeId(e.target.value); setSelectedBatchId(""); setSummary(null); }}
+              className="w-full px-3 py-2.5 text-sm rounded-xl border border-base-200 bg-base-100 text-base-content outline-none focus:border-primary"
+            >
+              {!examTypes?.length && <option value="">Loading exam types...</option>}
+              {examTypes?.map((t: any) => (
+                <option key={t.examTypeId} value={t.examTypeId}>{t.examTypeName}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-base-content/60 mb-1.5 block">Semester</label>
+            <select
+              value={effectiveSemesterId}
+              onChange={(e) => { setSemesterId(e.target.value); setSelectedBatchId(""); setSummary(null); }}
+              className="w-full px-3 py-2.5 text-sm rounded-xl border border-base-200 bg-base-100 text-base-content outline-none focus:border-primary"
+            >
+              {!semesters?.length && <option value="">Loading semesters...</option>}
+              {semesters?.map((s: any) => (
+                <option key={s.semesterId} value={s.semesterId}>Semester {s.semesterNo}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <p className="text-xs text-base-content/40">
+          Files are matched by roll number (UCSTGO-XXXX.pdf or XXXX.pdf). Re-uploading to the same{" "}
+          {termLabel(effectiveTermId)} / exam / semester continues the existing batch — existing students are updated, new ones inserted.
+        </p>
       </div>
 
-      {tab === "upload" ? (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <div className="lg:col-span-2 space-y-4">
-            <div className="bg-base-100 rounded-2xl border border-base-200 p-4 sm:p-6 shadow-sm">
-              <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-                <h2 className="text-sm font-bold text-base-content flex items-center gap-2">
-                  <svg className="w-4 h-4 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                  </svg>
-                  Upload PDFs
-                </h2>
-                <div className="flex gap-1">
-                  <button 
-                    onClick={(e) => { e.stopPropagation(); setUploadYearFilter(0); }} 
-                    className={`px-3 py-1 text-[10px] font-bold rounded-full transition-all ${uploadYearFilter === 0 ? "bg-primary text-white shadow-sm" : "bg-base-200 text-base-content/50 hover:bg-base-300"}`}
-                  >
-                    All
-                  </button>
-                  {[1, 2, 3, 4].map((y) => (
-                    <button 
-                      key={y} 
-                      onClick={(e) => { e.stopPropagation(); setUploadYearFilter(y); }} 
-                      className={`px-3 py-1 text-[10px] font-bold rounded-full transition-all ${uploadYearFilter === y ? "bg-primary text-white shadow-sm" : "bg-base-200 text-base-content/50 hover:bg-base-300"}`}
-                    >
-                      {YEAR_LABELS[y].replace("Year ", "Y")}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2 space-y-4">
+          <div className="bg-base-100 rounded-2xl border border-base-200 p-4 sm:p-6 shadow-sm">
+            <h2 className="text-sm font-bold text-base-content mb-3 flex items-center gap-2">
+              <svg className="w-4 h-4 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+              </svg>
+              Upload PDFs
+            </h2>
+            <div
+              onDragOver={(e) => { e.preventDefault(); }}
+              onDrop={handleDrop}
+              onClick={() => fileRef.current?.click()}
+              className="border-2 border-dashed border-base-200 rounded-xl p-8 text-center cursor-pointer transition-all hover:border-primary/50 hover:bg-base-200/30"
+            >
+              <input ref={fileRef} type="file" multiple accept=".pdf" onChange={handleFileSelect} className="hidden" />
+              <div className="w-14 h-14 mx-auto mb-3 rounded-2xl bg-primary/10 flex items-center justify-center">
+                <svg className="w-7 h-7 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                </svg>
+              </div>
+              <p className="text-sm font-semibold text-base-content">Drop PDFs here or <span className="text-primary">browse</span></p>
+              <p className="text-xs text-base-content/40 mt-1">Name files with the roll number, e.g. UCSTGO-1001.pdf or 1001.pdf</p>
+            </div>
+
+            {files.length > 0 && (
+              <div className="mt-4 divide-y divide-base-200 border border-base-200 rounded-xl max-h-64 overflow-y-auto">
+                {files.map((f) => (
+                  <div key={f.name} className="flex items-center gap-3 px-4 py-2.5 text-sm">
+                    <span className="w-8 h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                    </span>
+                    <span className="flex-1 font-medium text-base-content truncate">{f.name}</span>
+                    <span className="text-[10px] text-base-content/40">{formatSize(f.size)}</span>
+                    <button onClick={() => removeFile(f.name)} className="p-1.5 rounded-lg text-base-content/20 hover:text-red-500 hover:bg-red-50 transition-all">
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
                     </button>
-                  ))}
-                </div>
-              </div>
-              <div 
-                onDragOver={(e) => { e.preventDefault(); setDragOver(true); }} 
-                onDragLeave={() => setDragOver(false)} 
-                onDrop={handleDrop} 
-                onClick={() => fileRef.current?.click()} 
-                className={`relative border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all overflow-hidden ${dragOver ? "border-primary bg-primary/5 scale-[1.01]" : "border-base-200 hover:border-primary/50 hover:bg-base-200/30"}`}
-              >
-                <input ref={fileRef} type="file" multiple accept=".pdf" onChange={handleFileSelect} className="hidden" />
-                {dragOver && <div className="absolute inset-0 bg-primary/5 pointer-events-none" />}
-                <div className={`transition-transform duration-200 ${dragOver ? "scale-110" : ""}`}>
-                  <div className="w-14 h-14 mx-auto mb-3 rounded-2xl bg-primary/10 flex items-center justify-center">
-                    <svg className="w-7 h-7 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                    </svg>
                   </div>
-                  <p className="text-sm font-semibold text-base-content">Drop PDFs here or <span className="text-primary">browse</span></p>
-                  <p className="text-xs text-base-content/40 mt-1">Name files with roll number (xxxx) or student name</p>
-                  {uploadYearFilter > 0 && <p className="text-[10px] text-primary font-medium mt-2">Matching against {YEAR_LABELS[uploadYearFilter]} students only</p>}
-                </div>
+                ))}
               </div>
-            </div>
+            )}
 
-            {totalFiles > 0 && (
-              <div className="bg-base-100 rounded-2xl border border-base-200 shadow-sm overflow-hidden">
-                <div className="px-4 py-3 border-b border-base-200 flex items-center justify-between bg-base-200/20">
-                  <h2 className="text-sm font-bold text-base-content flex items-center gap-2">
-                    <svg className="w-4 h-4 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                    </svg>
-                    Files <span className="text-xs font-normal text-base-content/40 ml-1">({totalFiles})</span>
-                  </h2>
-                  <div className="flex items-center gap-2">
-                    <div className="h-1.5 w-20 bg-base-200 rounded-full overflow-hidden hidden sm:block">
-                      <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${matchedPct}%` }} />
-                    </div>
-                    <span className="text-xs text-green-600 font-semibold">{matchedCount + sentCount}/{totalFiles} matched</span>
-                  </div>
-                </div>
-                <div className="divide-y divide-base-200 max-h-80 overflow-y-auto">
-                  {[...files].reverse().map((file) => (
-                    <div key={file.id} className={`flex items-center gap-3 px-4 py-3 text-sm transition-all hover:bg-base-200/30 ${file.status === "sent" ? "opacity-60" : ""}`}>
-                      <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${file.status === "sent" ? "bg-green-100 text-green-600" : file.status === "matched" ? "bg-primary/10 text-primary" : "bg-red-50 text-red-400"}`}>
-                        {file.status === "sent" ? (
-                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                          </svg>
-                        ) : (
-                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                          </svg>
-                        )}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-semibold text-base-content truncate">{file.fileName}</p>
-                        <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                          {file.rollNo ? <span className="text-[10px] font-mono bg-base-200 px-1.5 py-0.5 rounded text-base-content/60">{file.rollNo}</span> : <span className="text-[10px] text-red-400 font-medium">No roll#</span>}
-                          {file.matchedStudent ? (
-                            <>
-                              <span className={`text-[10px] font-medium ${file.matchMethod === "roll" ? "text-green-600" : "text-blue-600"}`}>
-                                {file.matchedStudent.name}
-                              </span>
-                              <span className="text-[8px] text-base-content/30 uppercase">({file.matchMethod})</span>
-                            </>
-                          ) : file.rollNo ? (
-                            <span className="text-[10px] text-red-400">Not found</span>
-                          ) : (
-                            <span className="text-[10px] text-red-400">No match</span>
-                          )}
-                          {file.fileSize > 0 && <span className="text-[9px] text-base-content/30">{formatSize(file.fileSize)}</span>}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        {file.status === "matched" && (() => {
-                          const check = file.rollNo ? canSendTo(file.rollNo) : { ok: true };
-                          return (
-                            <button 
-                              onClick={() => sendSingle(file.id)} 
-                              disabled={sending || !check.ok} 
-                              className={`px-3 py-1.5 text-[10px] font-bold rounded-lg transition-all shadow-sm flex items-center gap-1 ${check.ok ? "bg-primary text-white hover:bg-primary/90" : "bg-red-100 text-red-500 cursor-not-allowed"}`} 
-                              title={!check.ok ? `Library hold: ${check.reason}` : ""}
-                            >
-                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M12 19V5m0 0l-7 7m7-7l7 7" />
-                              </svg>
-                              {check.ok ? "Send" : "Blocked"}
-                            </button>
-                          );
-                        })()}
-                        {file.status === "sent" && (
-                          <span className="px-2.5 py-1 text-[10px] font-bold rounded-lg bg-green-100 text-green-700 flex items-center gap-1">
-                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                            </svg>
-                            Sent
-                          </span>
-                        )}
-                        {file.status !== "sent" && (
-                          <button onClick={() => removeFile(file.id)} className="p-1.5 rounded-lg text-base-content/20 hover:text-red-500 hover:bg-red-50 transition-all">
-                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                {matchedCount > 0 && (
-                  <div className="p-4 border-t border-base-200 bg-gradient-to-r from-primary/5 to-transparent">
-                    <div className="flex items-center justify-between gap-3">
-                      <p className="text-xs text-base-content/50 hidden sm:block">
-                        <span className="font-semibold text-base-content">{matchedCount}</span> result{matchedCount > 1 ? "s" : ""} ready
-                      </p>
-                      <button 
-                        onClick={() => {
-                          const blocked = files.filter((f) => f.status === "matched" && f.rollNo && !canSendTo(f.rollNo).ok);
-                          if (blocked.length > 0) { 
-                            setToast({ 
-                              visible: true, 
-                              message: `${blocked.length} student${blocked.length > 1 ? "s" : ""} blocked by library hold — remove or resolve`, 
-                              type: "error" 
-                            }); 
-                            return; 
-                          }
-                          setConfirmSend(true);
-                        }} 
-                        disabled={sending} 
-                        className="flex-1 sm:flex-none px-5 py-2.5 text-sm font-bold rounded-xl bg-primary text-white hover:bg-primary/90 transition-all shadow-lg shadow-primary/20 disabled:opacity-60 flex items-center justify-center gap-2"
-                      >
-                        {sending ? (
-                          <>
-                            <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                            Sending...
-                          </>
-                        ) : (
-                          <>
-                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M12 19V5m0 0l-7 7m7-7l7 7" />
-                            </svg>
-                            Send All ({matchedCount})
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  </div>
+            {files.length > 0 && (
+              <button
+                onClick={upload}
+                disabled={uploading || !ready}
+                className="mt-4 w-full px-5 py-2.5 text-sm font-bold rounded-xl bg-primary text-white hover:bg-primary/90 transition-all shadow-sm disabled:opacity-60 flex items-center justify-center gap-2"
+              >
+                {uploading ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Uploading {uploadProgress}%...
+                  </>
+                ) : (
+                  `Upload ${files.length} file${files.length > 1 ? "s" : ""}`
                 )}
+              </button>
+            )}
+            {uploading && (
+              <div className="mt-3 h-2 bg-base-200 rounded-full overflow-hidden">
+                <div className="h-full bg-primary rounded-full transition-all duration-300" style={{ width: `${uploadProgress}%` }} />
               </div>
             )}
           </div>
 
-          <div className="space-y-4">
-            <div className="bg-base-100 rounded-2xl border border-base-200 p-5 shadow-sm">
-              <h2 className="text-sm font-bold text-base-content mb-4 flex items-center gap-2">
-                <svg className="w-4 h-4 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
-                Settings
-              </h2>
-              <div className="space-y-4">
-                <div>
-                  <label className="text-xs font-medium text-base-content/60 mb-1.5 block">Academic Year</label>
-                  <div className="relative">
-                    <select 
-                      value={academicYear} 
-                      onChange={(e) => setAcademicYear(e.target.value)} 
-                      className="w-full appearance-none px-4 py-2.5 rounded-xl border border-base-200 bg-base-100 text-sm font-medium text-base-content outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 cursor-pointer"
-                    >
-                      {["2024-2025", "2025-2026", "2026-2027"].map((y) => (
-                        <option key={y} value={y}>{y}</option>
+          {summary && (
+            <div className="bg-base-100 rounded-2xl border border-base-200 shadow-sm overflow-hidden">
+              <div className="px-4 py-3 border-b border-base-200 bg-base-200/20 flex items-center justify-between">
+                <h2 className="text-sm font-bold text-base-content">Upload Summary</h2>
+                <span className="text-xs text-base-content/40">
+                  {summary.matchedFiles} matched &middot; {summary.insertedDocuments} inserted &middot; {summary.updatedDocuments} updated
+                </span>
+              </div>
+              <div className="divide-y divide-base-200">
+                {summary.unmatchedFileNames.length > 0 && (
+                  <div className="px-4 py-3">
+                    <p className="text-xs font-bold text-error mb-1.5">Unmatched files ({summary.unmatchedFileNames.length}) — no student with that roll number</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {summary.unmatchedFileNames.map((n) => (
+                        <span key={n} className="text-[10px] font-mono bg-error/10 text-error px-2 py-0.5 rounded-full">{n}</span>
                       ))}
-                    </select>
-                    <svg className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 text-base-content/30 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-                    </svg>
+                    </div>
                   </div>
-                </div>
+                )}
+                {summary.failedFileNames.length > 0 && (
+                  <div className="px-4 py-3">
+                    <p className="text-xs font-bold text-error mb-1.5">Failed files ({summary.failedFileNames.length})</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {summary.failedFileNames.map((n) => (
+                        <span key={n} className="text-[10px] font-mono bg-error/10 text-error px-2 py-0.5 rounded-full">{n}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {summary.skippedFileNames.length > 0 && (
+                  <div className="px-4 py-3">
+                    <p className="text-xs font-bold text-base-content/50 mb-1.5">Skipped ({summary.skippedFileNames.length})</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {summary.skippedFileNames.map((n) => (
+                        <span key={n} className="text-[10px] font-mono bg-base-200 text-base-content/50 px-2 py-0.5 rounded-full">{n}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {summary.unmatchedFileNames.length === 0 && summary.failedFileNames.length === 0 && summary.skippedFileNames.length === 0 && (
+                  <div className="px-4 py-3 text-xs text-success font-medium">All uploaded files were matched successfully.</div>
+                )}
               </div>
             </div>
-          </div>
+          )}
         </div>
-      ) : (
+
         <div className="space-y-4">
-          <div className="bg-base-100 rounded-2xl border border-base-200 p-4 sm:p-5 shadow-sm">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex gap-1.5">
-                {[1, 2, 3, 4].map((y) => (
-                  <button 
-                    key={y} 
-                    onClick={() => setYearFilter(y)} 
-                    className={`px-4 py-1.5 text-xs font-bold rounded-full transition-all ${yearFilter === y ? "bg-primary text-white shadow-sm" : "bg-base-200 text-base-content/60 hover:bg-base-300"}`}
-                  >
-                    {YEAR_LABELS[y]}
-                  </button>
-                ))}
-              </div>
-              <div className="flex gap-1.5">
-                {(["all", "clear", "hold"] as const).map((f) => (
-                  <button 
-                    key={f} 
-                    onClick={() => setLibraryFilter(f)} 
-                    className={`px-3 py-1.5 text-[10px] font-semibold rounded-full transition-all ${libraryFilter === f ? "bg-base-content text-base-100" : "bg-base-200 text-base-content/50 hover:bg-base-300"}`}
-                  >
-                    {f === "all" ? "All" : f === "clear" ? "Library Clear" : "Library Hold"}
-                  </button>
-                ))}
-              </div>
+          <div className="bg-base-100 rounded-2xl border border-base-200 p-5 shadow-sm">
+            <h2 className="text-sm font-bold text-base-content mb-3">Batches</h2>
+            {batchesLoading && <p className="text-xs text-base-content/40 py-2">Loading batches...</p>}
+            {!batchesLoading && batches?.length === 0 && (
+              <p className="text-xs text-base-content/40 py-2">
+                No batches for {termLabel(effectiveTermId)} / this exam type / semester yet. Upload to create one.
+              </p>
+            )}
+            <div className="space-y-2 max-h-96 overflow-y-auto">
+              {batches?.map((b: any) => (
+                <button
+                  key={b.batchId}
+                  onClick={() => { setSelectedBatchId(b.batchId); setSummary(null); }}
+                  className={`w-full text-left px-3.5 py-3 rounded-xl border transition-all ${
+                    batchId === b.batchId ? "bg-primary/5 border-primary" : "bg-base-100 border-base-200 hover:border-base-300"
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-bold text-base-content">
+                      {b.examTypeName} &middot; Sem {b.semesterNo}
+                    </p>
+                    <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full uppercase ${
+                      b.status === "PUBLISHED" ? "bg-success/15 text-success" : "bg-warning/15 text-warning"
+                    }`}>
+                      {b.status}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-base-content/40 mt-1">
+                    {b.totalFiles} files &middot; {b.matchedFiles} matched &middot; uploaded by {b.uploadedByStaffNo || "—"}
+                  </p>
+                  {b.publishedAt && (
+                    <p className="text-[10px] text-base-content/30 mt-0.5">Published {new Date(b.publishedAt).toLocaleString()}</p>
+                  )}
+                </button>
+              ))}
             </div>
-          </div>
-
-          <div className="bg-base-100 rounded-2xl border border-base-200 shadow-sm overflow-hidden">
-            <div className="px-4 py-3 border-b border-base-200 bg-base-200/20 flex items-center justify-between">
-              <h2 className="text-sm font-bold text-base-content">{YEAR_LABELS[yearFilter]} &middot; {yearStudents.length} students</h2>
-              <span className="text-xs text-base-content/40">
-                {yearStudents.filter((s: any) => getResultStatus(s.rollNo) === "received").length} received &middot; {yearStudents.filter((s: any) => getLibraryStatus(s.rollNo).hasOverdueBooks).length} library hold
-              </span>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-base-200/30 text-left text-[11px] font-bold text-base-content/50 uppercase tracking-wider">
-                    <th className="px-4 py-3">Student</th>
-                    <th className="px-4 py-3">Roll No</th>
-                    <th className="px-4 py-3 text-center">Sem</th>
-                    <th className="px-4 py-3 text-center">Result</th>
-                    <th className="px-4 py-3 text-center">Library</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-base-200">
-                  {yearStudents.map((s: any) => {
-                    const lib = getLibraryStatus(s.rollNo);
-                    const rStatus = getResultStatus(s.rollNo);
-                    return (
-                      <tr key={s.studentId} className={`hover:bg-base-200/30 transition-colors ${lib.hasOverdueBooks ? "bg-red-50/40" : ""}`}>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-2.5">
-                            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary/20 to-accent/20 flex items-center justify-center text-base-content font-bold text-[10px]">
-                              {s.studentName.split(" ").map((n: string) => n[0]).join("")}
-                            </div>
-                            <span className="font-semibold text-base-content text-sm">{s.studentName}</span>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3 font-mono text-xs text-base-content/60">{s.rollNo}</td>
-                        <td className="px-4 py-3 text-center text-xs text-base-content/50">{s.semesterNo}</td>
-                        <td className="px-4 py-3 text-center">
-                          {rStatus === "received" && (
-                            <span className="text-[10px] font-bold bg-green-100 text-green-700 px-2.5 py-1 rounded-full">Received</span>
-                          )}
-                          {rStatus === "pending" && (
-                            <span className="text-[10px] font-bold bg-amber-100 text-amber-700 px-2.5 py-1 rounded-full">Pending</span>
-                          )}
-                          {rStatus === "unavailable" && (
-                            <span className="text-[10px] font-medium bg-base-200 text-base-content/40 px-2.5 py-1 rounded-full">Unavailable</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-center">
-                          {lib.hasOverdueBooks ? (
-                            <span className="text-[10px] font-bold bg-red-100 text-red-600 px-2.5 py-1 rounded-full flex items-center gap-1 justify-center">
-                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4.5c-.77-.833-2.694-.833-3.464 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z" />
-                              </svg>
-                              {lib.overdueCount} overdue
-                            </span>
-                          ) : (
-                            <span className="text-[10px] font-medium text-green-600 flex items-center gap-1 justify-center">
-                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                              </svg>
-                              Clear
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            {selectedBatch && selectedBatch.status !== "PUBLISHED" && (
+              <button
+                onClick={() => setConfirmPublish(true)}
+                disabled={publishing}
+                className="mt-3 w-full px-4 py-2.5 text-sm font-bold rounded-xl bg-success text-white hover:bg-success/90 transition-all shadow-sm disabled:opacity-60 flex items-center justify-center gap-2"
+              >
+                {publishing ? "Publishing..." : `Publish ${selectedBatch.examTypeName} results`}
+              </button>
+            )}
+            {selectedBatch?.status === "PUBLISHED" && (
+              <p className="mt-3 text-[10px] text-success font-bold text-center">Published — visible to students</p>
+            )}
           </div>
         </div>
-      )}
+      </div>
 
-      <Toast 
-        visible={toast.visible} 
-        message={toast.message} 
-        type={toast.type} 
-        onClose={() => setToast((p) => ({ ...p, visible: false }))} 
-      />
-      <ConfirmModal 
-        title="Send Exam Results" 
-        message={`Send ${matchedCount} result${matchedCount > 1 ? "s" : ""} to matched students?`} 
-        confirmLabel="Send All" 
-        danger={false} 
-        visible={confirmSend} 
-        onConfirm={sendAll} 
-        onCancel={() => setConfirmSend(false)} 
+      <div className="bg-base-100 rounded-2xl border border-base-200 shadow-sm overflow-hidden">
+        <div className="px-4 py-3 border-b border-base-200 bg-base-200/20 flex items-center justify-between">
+          <h2 className="text-sm font-bold text-base-content">
+            Result Documents {batchId ? `— ${batches?.find((b: any) => b.batchId === batchId)?.examTypeName || ""} Sem ${batches?.find((b: any) => b.batchId === batchId)?.semesterNo || ""}` : ""}
+          </h2>
+          <span className="text-xs text-base-content/40">
+            {documentsLoading ? "Loading..." : `${documents?.length ?? 0} documents`}
+          </span>
+        </div>
+        {documentsLoading ? (
+          <div className="flex items-center justify-center py-12">
+            <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : documents?.length === 0 ? (
+          <div className="p-8 text-center text-sm text-base-content/40">
+            No documents yet. Upload PDFs above to create them.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-base-200/30 text-left text-[11px] font-bold text-base-content/50 uppercase tracking-wider">
+                  <th className="px-4 py-3">Roll No</th>
+                  <th className="px-4 py-3">Student</th>
+                  <th className="px-4 py-3">File</th>
+                  <th className="px-4 py-3">Storage Path</th>
+                  <th className="px-4 py-3 text-center">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-base-200">
+                {documents?.map((d: any) => (
+                  <tr key={d.resultDocumentId} className="hover:bg-base-200/30 transition-colors">
+                    <td className="px-4 py-2.5 font-mono text-xs text-base-content/60">{d.rollNo}</td>
+                    <td className="px-4 py-2.5 font-medium text-base-content">{d.studentName}</td>
+                    <td className="px-4 py-2.5 text-xs text-base-content/70">{d.pdfFileName}</td>
+                    <td className="px-4 py-2.5 font-mono text-[10px] text-base-content/40">{d.storageObjectPath}</td>
+                    <td className="px-4 py-2.5 text-center">
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                        d.releaseStatus === "RELEASED" ? "bg-success/15 text-success"
+                        : d.releaseStatus === "BLOCKED" ? "bg-error/10 text-error"
+                        : "bg-base-200 text-base-content/50"
+                      }`}>
+                        {d.releaseStatus}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <Toast visible={toast.visible} message={toast.message} type={toast.type} onClose={() => setToast((p) => ({ ...p, visible: false }))} />
+      <ConfirmModal
+        title="Publish Exam Results"
+        message={`Publish ${selectedBatch ? `${selectedBatch.examTypeName} (Semester ${selectedBatch.semesterNo})` : "this batch"} to students? This makes the documents visible to them.`}
+        confirmLabel="Publish"
+        danger={false}
+        visible={confirmPublish}
+        onConfirm={publish}
+        onCancel={() => setConfirmPublish(false)}
       />
     </div>
   );

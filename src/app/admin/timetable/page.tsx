@@ -203,7 +203,7 @@ export default function TimetablePage() {
 
   const hod = useMemo(() => {
     return facultyStaff.find(
-      (s: any) => s.positions?.some((p: any) => p.positionName === "HOD")
+      (s: any) => s.positions?.includes?.("HOD")
     );
   }, [facultyStaff]);
 
@@ -609,7 +609,7 @@ export default function TimetablePage() {
                     <div className="flex items-center gap-2">
                       <div
                         className={`w-7 h-7 rounded-full flex items-center justify-center text-white font-bold text-[10px] ${
-                          t.positions?.some((p: any) => p.positionName === "HOD")
+                          t.positions?.includes?.("HOD")
                             ? "bg-accent"
                             : "bg-primary/60"
                         }`}
@@ -621,7 +621,7 @@ export default function TimetablePage() {
                           {t.staffName}
                         </p>
                         <p className="text-[10px] text-base-content/40">
-                          {t.positions?.some((p: any) => p.positionName === "HOD")
+                          {t.positions?.includes?.("HOD")
                             ? "Head of Dept"
                             : "Lecturer"}
                         </p>

@@ -14,7 +14,7 @@ export default function StudentsPage() {
   const [year, setYear] = useState<number | "all">("all");
   const [view, setView] = useState<ViewMode>("grouped");
 
-  const { students, isLoading } = useStudents();
+  const { students, isLoading, isError } = useStudents();
   const { majors } = useMajors();
 
   const majorLabels = useMemo(() => {
@@ -178,6 +178,12 @@ export default function StudentsPage() {
           )}
         </div>
       </div>
+
+      {isError && (
+        <div className="bg-error/10 border border-error/30 rounded-2xl px-4 py-3 text-sm text-error font-medium">
+          Failed to load students — is the backend running? Please try again later.
+        </div>
+      )}
 
       {isLoading ? (
         <div className="flex items-center justify-center py-16">

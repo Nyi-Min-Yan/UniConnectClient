@@ -1,7 +1,7 @@
 "use client";
 
 import useSWR from 'swr';
-import type { UserResponse, StaffResponse, StudentResponse } from '@/types';
+import type { UserResponse, StaffResponse, StudentResponse, LecturerResponse } from '@/types';
 
 export function useUsers() {
   const { data, error, isLoading, mutate } = useSWR<UserResponse[]>('/api/users');
@@ -34,6 +34,21 @@ export function useStaff() {
     isLoading,
     isError: !!error,
     refreshStaff: mutate,
+  };
+}
+
+export function useLecturers(termId?: string | null) {
+  const endpoint = termId
+    ? `/api/staff/lecturers?termId=${termId}`
+    : '/api/staff/lecturers';
+
+  const { data, error, isLoading, mutate } = useSWR<LecturerResponse[]>(endpoint);
+
+  return {
+    lecturers: data ?? [],
+    isLoading,
+    isError: !!error,
+    refreshLecturers: mutate,
   };
 }
 
