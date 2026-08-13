@@ -7,8 +7,8 @@
 @plugin "@tailwindcss/typography";
 
 @theme inline {
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: "Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Fira Code", "Cascadia Code", "Consolas", monospace;
 }
 
 :root, [data-theme="light"] {
@@ -52,7 +52,7 @@
 body {
   background: var(--color-base-100);
   color: var(--color-base-content);
-  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
 }
 
 @keyframes fadeInUp {
